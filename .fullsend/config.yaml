@@ -15,7 +15,7 @@ agents:
   - name: triage
     model: google-vertex/gemini-3.8-flash
     source: harness/triage.yaml
-  - name: coder
+  - name: code
     model: google-vertex/gemini-3.8-flash
   - name: review
     model: google-vertex/gemini-3.8-flash
