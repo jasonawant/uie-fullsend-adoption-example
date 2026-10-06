@@ -2,8 +2,7 @@ name: fullsend Jira poll
 
 on:
   schedule:
-    # UIE: poll every 30 minutes rather than the upstream five-minute interval.
-    - cron: "*/30 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch: {}
 
 permissions:
