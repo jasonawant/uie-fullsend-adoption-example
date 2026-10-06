@@ -4,7 +4,7 @@ base: https://raw.githubusercontent.com/fullsend-ai/agents/93c69826f40bd14c8c40d
 trigger: >
   event.source.system == "jira"
     && event.entity.kind == "work_item"
-    && "repo:OWNER/REPOSITORY" in event.state.labels
+    && "repo:jasonawant/uie-fullsend-adoption-example" in event.state.labels
     && event.state.labels.filter(label, label.startsWith("repo:")).size() == 1
     && (
      (event.transition.kind == "label_changed"
