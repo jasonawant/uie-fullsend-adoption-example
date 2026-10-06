@@ -1,0 +1,25 @@
+base: https://raw.githubusercontent.com/fullsend-ai/agents/93c69826f40bd14c8c40dc5797bd7d9ef5a8b748/harness/triage.yaml
+
+trigger: >
+  event.source.system == "jira"
+    && event.entity.kind == "work_item"
+    && "repo:OWNER/REPOSITORY" in event.state.labels
+    && event.state.labels.filter(label, label.startsWith("repo:")).size() == 1
+    && (
+     (event.transition.kind == "label_changed"
+       && event.transition.label.action == "added"
+       && event.transition.label.name == "ready-to-triage")
+     ||
+     (event.transition.kind == "comment_added"
+       && has(event.transition.comment.command)
+       && event.transition.comment.command == "/fs-triage")
+   )
+
+# Disable automatic code-agent handoff during the initial rollout.
+env:
+  runner:
+    TRIAGE_AUTO_CODE: "off"
+    TRIAGE_AUTO_CODE_CATEGORIES: ""
+  sandbox:
+    TRIAGE_AUTO_CODE: "off"
+    TRIAGE_AUTO_CODE_CATEGORIES: ""

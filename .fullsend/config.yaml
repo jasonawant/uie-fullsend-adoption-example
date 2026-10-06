@@ -11,6 +11,18 @@ roles:
     - review
     - fix
     - retro
+agents:
+  - name: triage
+    model: google-vertex/gemini-3.8-flash
+    source: harness/triage.yaml
+  - name: coder
+    model: google-vertex/gemini-3.8-flash
+  - name: review
+    model: google-vertex/gemini-3.8-flash
+  - name: fix
+    model: google-vertex/gemini-3.8-flash
+  - name: retro
+    model: google-vertex/gemini-3.8-flash
 allowed_remote_resources:
     - https://raw.githubusercontent.com/fullsend-ai/fullsend/
     - https://raw.githubusercontent.com/fullsend-ai/agents/
