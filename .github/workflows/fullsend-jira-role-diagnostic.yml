@@ -1,0 +1,92 @@
+name: fullsend Jira role diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      actor_account_id:
+        description: Jira account ID of the user who triggered the event
+        required: true
+        default: 712020:2ad33f3c-14eb-4e8b-847a-689d4caefc6f
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    env:
+      ACTOR_ACCOUNT_ID: ${{ inputs.actor_account_id }}
+      JIRA_BASE_URL: ${{ vars.JIRA_BASE_URL }}
+      JIRA_TOKEN: ${{ secrets.JIRA_TOKEN }}
+      JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+      PROJECT_KEY: FRFLY
+    steps:
+      - name: Resolve poller and actor roles
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${JIRA_BASE_URL}" ]]; then
+            echo "::error::JIRA_BASE_URL must be configured as an Actions variable."
+            exit 1
+          fi
+
+          temp_dir="$(mktemp -d)"
+          trap 'rm -rf "${temp_dir}"' EXIT
+
+          jira_get() {
+            curl --fail --silent --show-error \
+              --user "${JIRA_USER_EMAIL}:${JIRA_TOKEN}" \
+              "$1"
+          }
+
+          jira_get "${JIRA_BASE_URL}/rest/api/3/myself" > "${temp_dir}/myself.json"
+          jira_get "${JIRA_BASE_URL}/rest/api/3/project/${PROJECT_KEY}/role" > "${temp_dir}/roles.json"
+          jira_get "${JIRA_BASE_URL}/rest/api/3/user/groups?accountId=${ACTOR_ACCOUNT_ID}" \
+            > "${temp_dir}/actor-groups.json"
+
+          poller_account_id="$(jq -r '.accountId // empty' "${temp_dir}/myself.json")"
+          if [[ -z "${poller_account_id}" ]]; then
+            echo "::error::Jira did not return an authenticated account ID."
+            exit 1
+          fi
+
+          : > "${temp_dir}/memberships.jsonl"
+          while IFS=$'\t' read -r role_name role_url; do
+            role_file="${temp_dir}/role-$(printf '%s' "${role_name}" | sha256sum | cut -d ' ' -f 1).json"
+            jira_get "${role_url}" > "${role_file}"
+
+            jq -cn \
+              --arg role_name "${role_name}" \
+              --arg actor_account_id "${ACTOR_ACCOUNT_ID}" \
+              --slurpfile role_data "${role_file}" \
+              --slurpfile actor_groups "${temp_dir}/actor-groups.json" '
+                ($actor_groups[0] | map(.groupId)) as $group_ids |
+                {
+                  role: $role_name,
+                  direct: any($role_data[0].actors[]?; .actorUser.accountId? == $actor_account_id),
+                  group: any(
+                    $role_data[0].actors[]?;
+                    (.actorGroup.groupId? // "") as $group_id |
+                    $group_ids | index($group_id) != null
+                  )
+                }
+              ' >> "${temp_dir}/memberships.jsonl"
+          done < <(jq -r 'to_entries[] | [.key, .value] | @tsv' "${temp_dir}/roles.json")
+
+          jq -s '[.[] | select(.direct or .group)]' "${temp_dir}/memberships.jsonl" \
+            > "${temp_dir}/matched-roles.json"
+
+          effective_role="$(jq -r '
+            if any(.[]; (.role | ascii_downcase) == "administrators") then "admin"
+            elif any(.[]; (.role | ascii_downcase) == "developers") then "write"
+            elif length > 0 then "read"
+            else "external"
+            end
+          ' "${temp_dir}/matched-roles.json")"
+
+          echo "poller_account_id=${poller_account_id}"
+          echo "poller_matches_actor=$([[ "${poller_account_id}" == "${ACTOR_ACCOUNT_ID}" ]] && echo true || echo false)"
+          echo "actor_account_id=${ACTOR_ACCOUNT_ID}"
+          echo "matched_project_roles=$(jq -c '[.[] | {role, direct, group}]' "${temp_dir}/matched-roles.json")"
+          echo "fullsend_effective_role=${effective_role}"
