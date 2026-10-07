@@ -17,6 +17,7 @@ agents:
     source: harness/triage.yaml
   - name: code
     model: google-vertex/gemini-3.8-flash
+    source: harness/code.yaml
   - name: review
     model: google-vertex/gemini-3.8-flash
   - name: fix

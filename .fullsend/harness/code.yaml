@@ -1,0 +1,17 @@
+# Extend the reviewed upstream code harness with Jira-specific routing.
+base: https://raw.githubusercontent.com/fullsend-ai/agents/93c69826f40bd14c8c40dc5797bd7d9ef5a8b748/harness/code.yaml#sha256=bd1d925cbfac3f95d785e3c7abe6edc9ac649818b921f85fa7168ef9b6b77583
+
+trigger: >
+  event.source.system == "jira"
+    && event.entity.kind == "work_item"
+    && "repo:jasonawant/uie-fullsend-adoption-example" in event.state.labels
+    && event.state.labels.filter(label, label.startsWith("repo:")).size() == 1
+    && (
+      (event.transition.kind == "label_changed"
+        && event.transition.label.action == "added"
+        && event.transition.label.name == "ready-to-code")
+      ||
+      (event.transition.kind == "comment_added"
+        && has(event.transition.comment.command)
+        && event.transition.comment.command == "/fs-code")
+    )
