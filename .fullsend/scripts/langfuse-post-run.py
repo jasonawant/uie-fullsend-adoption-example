@@ -12,7 +12,9 @@ import math
 import os
 from pathlib import Path
 import re
+import secrets
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -42,10 +44,26 @@ def otlp_attributes(values):
             encoded = {"intValue": str(value)}
         elif isinstance(value, float):
             encoded = {"doubleValue": value}
+        elif isinstance(value, list):
+            encoded = {"arrayValue": {"values": [{"stringValue": str(item)} for item in value]}}
         else:
             encoded = {"stringValue": str(value)}
         result.append({"key": key, "value": encoded})
     return result
+
+
+def add_filterable_context(values):
+    for key in ("project_key", "cost_center", "github.repository", "github.run_id"):
+        if values.get(key):
+            name = key.replace(".", "_")
+            for level in ("trace", "observation"):
+                values[f"langfuse.{level}.metadata.{name}"] = values[key]
+    tags = [f"{label}:{values[key]}" for key, label in (
+        ("project_key", "project_key"), ("cost_center", "cost_center"),
+        ("github.repository", "repo"),
+    ) if values.get(key)]
+    if tags:
+        values["langfuse.trace.tags"] = tags
 
 
 def number(value, integer=False):
@@ -126,15 +144,31 @@ def build_payload(path, context):
              if parent.name.startswith("fullsend-")), "run")
         values["langfuse.trace.name"] = f"{stage}: {context.get('github.repository', 'fullsend')}"
         span_id = hashlib.sha256(f"fullsend-langfuse-generation-v1:{trace_id}:{parent_id}".encode()).hexdigest()[:16]
-        for key in ("project_key", "cost_center", "github.repository", "github.run_id"):
-            if values.get(key):
-                values[f"langfuse.observation.metadata.{key.replace('.', '_')}"] = values[key]
+        add_filterable_context(values)
         output.append({"traceId": trace_id, "spanId": span_id, "parentSpanId": parent_id,
                        "name": f"{stage.capitalize()} Generation: {model}", "kind": 1,
                        "startTimeUnixNano": str(start), "endTimeUnixNano": str(end),
                        "attributes": otlp_attributes(values), "status": {"code": (agent.get("status") or {}).get("code", 1)}})
     return {"resourceSpans": [{"resource": {"attributes": otlp_attributes(context)},
             "scopeSpans": [{"scope": {"name": "fullsend-generation-bridge", "version": "1.0.0"}, "spans": output}]}]}
+
+
+def verification_payload(trace_id, context):
+    if not re.fullmatch(r"[0-9a-fA-F]{32}", trace_id):
+        raise ValueError("Invalid verification trace ID")
+    if not context.get("cost_center") or context["cost_center"].lower() == "unassigned":
+        raise ValueError("Missing configured cost_center resource attribute")
+    now = time.time_ns()
+    values = dict(context)
+    values["langfuse.trace.name"] = "Fullsend Langfuse verification"
+    add_filterable_context(values)
+    span = {"traceId": trace_id.lower(), "spanId": secrets.token_hex(8),
+            "name": "Fullsend Langfuse verification", "kind": 1,
+            "startTimeUnixNano": str(now), "endTimeUnixNano": str(now + 1_000_000),
+            "attributes": otlp_attributes(values), "status": {"code": 1}}
+    return {"resourceSpans": [{"resource": {"attributes": otlp_attributes(context)},
+            "scopeSpans": [{"scope": {"name": "fullsend-generation-bridge", "version": "1.0.0"},
+                            "spans": [span]}]}]}
 
 
 def export(payload, env):
@@ -163,9 +197,14 @@ def export(payload, env):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("artifacts", type=Path)
+    parser.add_argument("artifacts", nargs="?", type=Path)
     parser.add_argument("--dry-run", action="store_true", help="Build and count spans without contacting Langfuse")
+    parser.add_argument("--verify-trace-id", help="Export one diagnostic trace with this 32-character hex ID")
     args = parser.parse_args(argv)
+    if args.artifacts is None and args.verify_trace_id is None:
+        parser.error("artifacts or --verify-trace-id is required")
+    if args.artifacts is not None and args.verify_trace_id is not None:
+        parser.error("artifacts and --verify-trace-id cannot be combined")
     context = {}
     for item in os.environ.get("OTEL_RESOURCE_ATTRIBUTES", "").split(","):
         if "=" in item:
@@ -180,6 +219,17 @@ def main(argv=None):
         context["session.id"] = context["langfuse.session.id"] = context["github.run_id"]
     if context.get("user.id"):
         context["langfuse.user.id"] = context["user.id"]
+    if args.verify_trace_id is not None:
+        try:
+            payload = verification_payload(args.verify_trace_id, context)
+            if not args.dry_run:
+                export(payload, os.environ)
+            print(f"{'Prepared' if args.dry_run else 'Exported'} verification trace {args.verify_trace_id.lower()}.")
+            return 0
+        except Exception as error:
+            status = f" (HTTP {error.code})" if isinstance(error, urllib.error.HTTPError) else ""
+            print(f"Langfuse verification failed: {type(error).__name__}{status}", file=sys.stderr)
+            return 1
     files = sorted(args.artifacts.rglob("run-telemetry.jsonl"))
     if not files:
         print("No Fullsend telemetry artifacts found; nothing to export.")
