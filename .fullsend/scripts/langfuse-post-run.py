@@ -59,6 +59,7 @@ def add_filterable_context(values):
             for level in ("trace", "observation"):
                 values[f"langfuse.{level}.metadata.{name}"] = values[key]
     tags = [f"{label}:{values[key]}" for key, label in (
+        ("gen_ai.agent.name", "stage"),
         ("project_key", "project_key"), ("cost_center", "cost_center"),
         ("github.repository", "repo"),
     ) if values.get(key)]
@@ -99,6 +100,8 @@ def build_payload(path, context):
     metrics_path = path.with_name("metrics.json")
     if metrics_path.is_file() and metrics_path.stat().st_size < 1024 * 1024:
         metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+        if not isinstance(metrics, dict):
+            metrics = {}
     # Use metrics only for a single agent; don't multiply whole-run totals across agents.
     if len(agents) != 1:
         metrics = {}
@@ -139,10 +142,20 @@ def build_payload(path, context):
         if cost is not None:
             values["gen_ai.usage.cost"] = number(cost)
             values["langfuse.observation.cost_details"] = json.dumps({"total": number(cost)})
+        for attr, fallback in (("fullsend.num_turns", "iterations"), ("fullsend.tool_calls", None)):
+            value = source.get(attr)
+            if value is None and fallback is not None:
+                value = metrics.get(fallback)
+            if value is not None:
+                values[attr] = number(value, integer=True)
         stage = source.get("gen_ai.agent.name") or next(
             (parent.name.removeprefix("fullsend-") for parent in path.parents
              if parent.name.startswith("fullsend-")), "run")
-        values["langfuse.trace.name"] = f"{stage}: {context.get('github.repository', 'fullsend')}"
+        values["gen_ai.agent.name"] = stage
+        trace_name = f"{stage}: {context.get('github.repository', 'fullsend')}"
+        if context.get("github.run_id"):
+            trace_name += f"#{context['github.run_id']}"
+        values["langfuse.trace.name"] = trace_name
         span_id = hashlib.sha256(f"fullsend-langfuse-generation-v1:{trace_id}:{parent_id}".encode()).hexdigest()[:16]
         add_filterable_context(values)
         output.append({"traceId": trace_id, "spanId": span_id, "parentSpanId": parent_id,
