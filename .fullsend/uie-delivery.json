@@ -1,0 +1,15 @@
+{
+  "jira": {
+    "project": "FRFLY",
+    "status": "In Progress",
+    "route_label": "repo:github/jasonawant/uie-fullsend-adoption-example",
+    "claim_property": "fullsend-uie-delivery-claim",
+    "triage_property": "fullsend-uie-delivery-triage",
+    "claim_ttl_minutes": 90,
+    "fields": {
+      "current_sprint": "customfield_10020",
+      "acceptance_criteria": "customfield_10718",
+      "story_points": "customfield_10028"
+    }
+  }
+}

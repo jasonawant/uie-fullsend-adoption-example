@@ -31,7 +31,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # UIE: poll with the same tested CLI release as the harness jobs.
-          gh release download v0.45.0 --repo fullsend-ai/fullsend \
+          gh release download v0.50.0 --repo fullsend-ai/fullsend \
             -p 'fullsend_*_linux_amd64.tar.gz' -O - | tar xz
           sudo mv fullsend /usr/local/bin/
 
@@ -46,21 +46,30 @@ jobs:
             --input-driver jira-poll \
             --jira-url "${JIRA_BASE_URL}" \
             --jira-project FRFLY \
-            --jql 'project = FRFLY AND labels = "repo:jasonawant/uie-fullsend-adoption-example" AND statusCategory != Done ORDER BY updated DESC' \
+            --jql 'project = FRFLY AND labels = "repo:github/jasonawant/uie-fullsend-adoption-example" AND statusCategory != Done ORDER BY updated DESC' \
             --target-repo "${TARGET_REPO}" \
             --output dispatches.json \
             --fullsend-dir .fullsend
 
       - name: Build dispatch matrix
         id: build-matrix
+        env:
+          JIRA_BASE_URL: ${{ vars.JIRA_BASE_URL }}
+          JIRA_TOKEN: ${{ secrets.JIRA_TOKEN }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
         run: |
           set -euo pipefail
-          if ! jq -e 'length > 0' dispatches.json > /dev/null 2>&1; then
+          python3 .fullsend/scripts/jira_uie_gate.py \
+            --config .fullsend/uie-delivery.json \
+            --input dispatches.json \
+            --output gated-dispatches.json \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if ! jq -e 'length > 0' gated-dispatches.json > /dev/null 2>&1; then
             echo "No dispatches."
             echo 'matrix={"include":[]}' >> "${GITHUB_OUTPUT}"
             exit 0
           fi
-          MATRIX=$(jq -c '{include: .}' dispatches.json)
+          MATRIX=$(jq -c '{include: .}' gated-dispatches.json)
           DELIM="MATRIX_$(openssl rand -hex 8)"
           {
             echo "matrix<<${DELIM}"
@@ -72,16 +81,15 @@ jobs:
   harness:
     name: Harness
     needs: poll
-    # UIE: use the same tested Fullsend release as the poller CLI.
-    # Higher assurance: replace only this @vX.Y.Z suffix with the release commit SHA.
-    uses: fullsend-ai/fullsend/.github/workflows/reusable-dispatch.yml@v0.45.0
+    # UIE owns the Jira stage lifecycle around the pinned Fullsend runtime.
+    uses: ./.github/workflows/uie-dispatch.yml
     with:
       matrix: ${{ needs.poll.outputs.matrix }}
       mint_url: ${{ vars.FULLSEND_MINT_URL }}
       gcp_region: ${{ vars.FULLSEND_GCP_REGION }}
       jira_base_url: ${{ vars.JIRA_BASE_URL }}
       # UIE: explicitly align the agent-run CLI with the poller CLI.
-      fullsend_version: v0.45.0
+      fullsend_version: v0.50.0
     secrets:
       FULLSEND_GCP_WIF_PROVIDER: ${{ secrets.FULLSEND_GCP_WIF_PROVIDER }}
       FULLSEND_GCP_PROJECT_ID: ${{ secrets.FULLSEND_GCP_PROJECT_ID }}
