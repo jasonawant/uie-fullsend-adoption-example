@@ -31,7 +31,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # UIE: poll with the same tested CLI release as the harness jobs.
-          gh release download v0.45.0 --repo fullsend-ai/fullsend \
+          gh release download v0.50.0 --repo fullsend-ai/fullsend \
             -p 'fullsend_*_linux_amd64.tar.gz' -O - | tar xz
           sudo mv fullsend /usr/local/bin/
 
@@ -89,7 +89,7 @@ jobs:
       gcp_region: ${{ vars.FULLSEND_GCP_REGION }}
       jira_base_url: ${{ vars.JIRA_BASE_URL }}
       # UIE: explicitly align the agent-run CLI with the poller CLI.
-      fullsend_version: v0.45.0
+      fullsend_version: v0.50.0
     secrets:
       FULLSEND_GCP_WIF_PROVIDER: ${{ secrets.FULLSEND_GCP_WIF_PROVIDER }}
       FULLSEND_GCP_PROJECT_ID: ${{ secrets.FULLSEND_GCP_PROJECT_ID }}

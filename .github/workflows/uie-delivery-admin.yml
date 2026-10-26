@@ -34,7 +34,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download v0.45.0 --repo fullsend-ai/fullsend \
+          gh release download v0.50.0 --repo fullsend-ai/fullsend \
             -p 'fullsend_*_linux_amd64.tar.gz' -O - | tar xz
           sudo mv fullsend /usr/local/bin/
       - name: Record triage result or release stage claim
