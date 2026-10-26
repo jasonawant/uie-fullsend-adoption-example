@@ -19,7 +19,7 @@ from jira_uie_gate import GateError, Jira
 
 
 FIELD_NAMES = {
-    "current_sprint": "Current Sprint",
+    "current_sprint": "Sprint",
     "acceptance_criteria": "Acceptance Criteria",
     "story_points": "Story Points",
 }

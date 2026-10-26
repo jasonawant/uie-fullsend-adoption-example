@@ -180,7 +180,7 @@ The gate returns every failed criterion in one result. A rejection does not crea
 |---|---|
 | Work type | Story, Task, or Bug |
 | Jira lifecycle status | In Progress |
-| Current Sprint | Set |
+| Current Sprint | Contains at least one Jira Sprint whose state is `active`; a future-only or closed-only Sprint value is not eligible |
 | Assignee | Set to an assigned user |
 | Summary | Not empty |
 | Description | Not empty |
@@ -211,6 +211,7 @@ Jira events authored by the configured Jira poller's bot identity must not quali
 - Configure the poller and every Jira mutation used by the workflow to authenticate as the same Jira poller's bot identity. This lets upstream self-authored-event filtering and the UIE trigger-actor check prevent poll loops.
 - Implement the Delivery Gate and Jira trigger handling so a label-addition or slash-command event from the Jira poller's bot identity cannot authorize a UIE stage.
 - Configure or extend stage concurrency so a later trigger cannot cancel an active UIE triage or code run. When a stage claim exists, the Delivery Gate must preserve the active run and emit idempotent active-run feedback instead.
+- Require the Jira Sprint custom field to contain an object whose `state` is `active`. Do not treat a non-empty Sprint value as sufficient because Jira retains closed sprints and can assign future sprints.
 - Use `fullsend issues post-comment --tracker jira` markers for idempotent Jira run-status and applicable triage-result comments. Jira stores those markers as comment entity properties rather than visible HTML comments.
 - A future autonomous triage-to-code handoff requires an explicit UIE Delivery Standard revision and a corresponding change to the triage harness configuration; it must not simulate a human Jira trigger.
 
@@ -345,7 +346,7 @@ This design requires one Jira issue to resolve to one GitHub repository. A futur
 | Code-to-review promotion | The code post-script unconditionally adds `ready-for-review`; default review routing also accepts automatic pull-request events. | The local dispatcher records a Jira correlation marker and removes the automatic label. The local PR router rejects bot label events and accepts only human `ready-for-review` or exact `/fs-review`. | Use the upstream automatic/manual promotion capability when available and retire the local routing workaround. |
 | Review feedback | Review findings, verdicts, labels, and lifecycle status notifications are pull-request-scoped. | The local PR dispatcher resolves the bot-authored Jira correlation marker and posts idempotent review lifecycle feedback to Jira. | Add normalized review-outcome extraction to enrich the Jira feedback beyond lifecycle status. |
 | Fix budget and feedback | Upstream permits five automatic fix runs per pull request and ten total manual fix runs shared with automatic runs; fix status and summaries are pull-request-scoped. | The local PR dispatcher routes manual `/fs-fix` and the configured review-bot `request-changes` event, then posts idempotent Jira fix lifecycle feedback. | Preserve upstream budgets and add explicit escalation feedback when a budget is exhausted. |
-| Authorization model | Fullsend favors repository-visible controls over Jira-label-only authority and can support autonomous stage handoffs when configured. | The repository gate validates both trigger paths and rejects normalized Jira events classified as bot-authored; it is disabled until the Jira custom-field IDs are configured. | Retain human GitHub review and merge authority, and preserve a future autonomous-handoff option. |
+| Authorization model | Fullsend favors repository-visible controls over Jira-label-only authority and can support autonomous stage handoffs when configured. | The repository gate validates both trigger paths, rejects normalized Jira events classified as bot-authored, and enforces verified FRFLY fields. | Retain human GitHub review and merge authority, and preserve a future autonomous-handoff option. |
 
 ## Repository Implementation-Change Inventory
 
@@ -357,15 +358,15 @@ prerequisites have been validated.
 
 | Group | Current repository state | Required change or decision | Status |
 |---|---|---|---|
-| Configuration | `.fullsend/config.yaml` configures triage, code, review, fix, and retro. Triage and code use local Jira CEL overlays. `.fullsend/uie-delivery.json` contains the fail-closed gate configuration. | Set the FRFLY custom-field IDs. | Gate and local review routing implemented; external Jira configuration required. |
+| Configuration | `.fullsend/config.yaml` configures triage, code, review, fix, and retro. Triage and code use local Jira CEL overlays. `.fullsend/uie-delivery.json` contains the fail-closed gate configuration and verified FRFLY field IDs. | Retain the verified mappings and validate them after Jira field changes. | Implemented; integration validation required. |
 | Configuration | `.fullsend/harness/triage.yaml` and `code.yaml`, and the Jira poller's JQL, use `repo:github/jasonawant/uie-fullsend-adoption-example`. | Retain the exact one-label predicate and use the forge-qualified convention for new repository routes. | Implemented. |
 | Configuration | The triage harness recognizes upstream `ready-for-triage`, matching the target contract. | Retain `ready-for-triage`; do not introduce a `ready-to-triage` compatibility trigger. | Implemented. |
 | Workflows | `.github/workflows/fullsend-poll-jira.yml` gates and claims poll dispatches before passing its filtered matrix to `.github/workflows/uie-dispatch.yml`. `.github/workflows/uie-pr-delivery.yml` owns human review and fix routing, PR-to-Jira correlation, and Jira lifecycle feedback. `.github/workflows/uie-delivery-admin.yml` remains available for recovery. | Validate checkpoint, dispatch scheduling, lock, retry, review-bot identity, and result extraction behavior against the pinned Fullsend release. | Local lifecycle routing implemented; integration validation required. |
-| Workflows | The code harness inherits the upstream code post-script; the review agent has no repository routing override. | Replace or compose the code post-script to prevent automatic `ready-for-review` application until agents#1769 supplies a supported setting. Configure the review entry point for manual promotion only. | Required; blocked pending upstream support unless a maintained local replacement is accepted. |
+| Workflows | The code harness inherits the upstream code post-script. The local dispatcher removes automatic `ready-for-review` promotion, and the local PR workflow accepts only manual review promotion. | Retire the local workaround when agents#1769 supplies a supported setting. | Implemented; upstream replacement pending. |
 | Workflows | Jira-sourced dispatches run through the local dispatcher after gate approval. PR-sourced review/fix dispatches resolve the Jira key from a bot-authored PR marker and post idempotent lifecycle evidence. | Add normalized review/fix outcome and budget-escalation extraction. | Lifecycle evidence implemented; outcome enrichment required. |
 | Labels | The gate mutates Jira trigger and claim labels and records claims in a Jira entity property. The local dispatcher performs terminal triage/code claim cleanup, removes automatic review promotion, and records PR correlation. The pinned upstream agents can also add and remove Jira labels. | Configure Jira label governance for `ready-for-triage`, `ready-to-code`, `triage-in-progress`, and `code-in-progress`; retain upstream GitHub review/fix labels. | Local lifecycle implemented; external Jira configuration required. |
 | GitHub protections | This repository's workflow permissions permit agent operations; no repository branch-protection or ruleset configuration is versioned here. | Configure GitHub outside this repository to require human review and appropriate status checks before merge. Ensure no GitHub rule, auto-merge setting, or token permission grants Fullsend merge authority. Record the selected protections operationally. | External prerequisite. |
-| Jira configuration | The poller is scoped to Jira project `FRFLY`; the target field and workflow assumptions are not represented as repository configuration. | Configure and document the eligible issue types, `In Progress` lifecycle status, Current Sprint, Assignee, Priority, Acceptance Criteria, Story Points, and custom-field IDs. Grant the poller identity read/comment/link/label permissions needed by the accepted implementation. | External prerequisite. |
+| Jira configuration | The poller is scoped to Jira project `FRFLY`. The gate maps Sprint to `customfield_10020`, Acceptance Criteria to `customfield_10718`, and Story Points to `customfield_10028`. | Retain the documented eligible issue types, `In Progress` lifecycle status, and poller read/comment/link/label permissions. Revalidate mappings after Jira field changes. | Field mapping implemented; operational validation required. |
 | Credentials | The poller uses `JIRA_USER_EMAIL`, `JIRA_TOKEN`, and `JIRA_BASE_URL`; Fullsend uses the existing GCP and observability secrets. `jira-poller-credential-validation-plan.md` documents safe credential validation. | Use one dedicated, non-human Jira bot identity for polling and all workflow Jira mutations. Keep all secret values outside repository files, confirm token rotation ownership, and complete the credential-validation runbook before enabling scheduling. | Required operational validation. |
 | Validation tests | CI runs unit tests for the delivery-gate field, route, trigger, bot, and claim-expiry behavior, in addition to Markdown and YAML lint. The credential runbook describes manual poller validation. | Add Jira/GitHub integration coverage for label mutation, comments, claim races, terminal cleanup, triage-to-code authorization, pull-request correlation, and manual review promotion. Run `yamllint .github/ .fullsend/` and `markdownlint "**/*.md"` for every change. | Unit coverage implemented; integration coverage required. |
 
@@ -461,18 +462,15 @@ rules reconcile those views:
 The following items are intentional blockers to production enablement, rather
 than implicit behavior of the target workflow:
 
-1. Define the authoritative Jira field IDs and value interpretations for
-   Current Sprint, Acceptance Criteria, Story Points, status, and issue type
-   in project `FRFLY`.
-2. Validate the bot-authored PR correlation marker and the review-bot identity
+1. Validate the bot-authored PR correlation marker and the review-bot identity
    against a controlled end-to-end run.
-3. Define how the poller and Jira mutation client identify the same bot actor
+2. Define how the poller and Jira mutation client identify the same bot actor
    reliably, including the behavior when Jira omits or changes an event-author
    field.
-4. Select and record the required GitHub branch protections, status checks,
+3. Select and record the required GitHub branch protections, status checks,
    review requirements, and auto-merge policy. These controls must preserve
    human merge authority.
-5. Validate the pinned Fullsend and agents releases against Jira poller
+4. Validate the pinned Fullsend and agents releases against Jira poller
    checkpoint, lock, dispatch, retry, comment-marker, label-mutation, and
    status-routing behavior before setting `FULLSEND_JIRA_POLL_ENABLED` to
    `true` for production use.
@@ -485,8 +483,8 @@ documented integration validation for every acceptance criterion above.
 ### Jira Identifier Discovery
 
 Use the credentials of the account that will run the Jira poller. The helper
-reads Jira's authenticated account and field catalog, prints candidate IDs, and
-leaves `.fullsend/uie-delivery.json` unchanged by default:
+reads Jira's field catalog, prints candidate IDs, and leaves
+`.fullsend/uie-delivery.json` unchanged by default:
 
 ```bash
 export JIRA_BASE_URL="https://your-site.atlassian.net"
@@ -502,8 +500,16 @@ non-secret IDs to the configuration:
 python3 .fullsend/scripts/jira_uie_discover.py --write
 ```
 
-The helper records `customfield_*` IDs for Current Sprint, Acceptance Criteria,
-and Story Points. It fails rather than guessing if a field name is missing or
-ambiguous. The upstream poller discovers its authenticated account through
-Jira's `/myself` preflight and classifies its own events as bot-authored. Keep
-the credentials in GitHub Actions secrets; never commit them.
+The helper records `customfield_*` IDs for Jira's `Sprint` field, Acceptance
+Criteria, and Story Points. The verified FRFLY mappings are `customfield_10020`,
+`customfield_10718`, and `customfield_10028`, respectively. The gate requires
+the Sprint value to include an active Sprint object. The upstream poller
+discovers its authenticated account through Jira's `/myself` preflight and
+classifies its own events as bot-authored. Keep the credentials in GitHub
+Actions secrets; never commit them.
+
+The mappings were checked against `FRFLY-732`, which has active `Firefly Sprint
+10` and populated Acceptance Criteria, and current-sprint items with positive
+Story Points. `FRFLY-754` has future-only `Firefly Sprint 11`; it demonstrates
+why the gate requires `state: active` rather than a merely non-empty Sprint
+field.

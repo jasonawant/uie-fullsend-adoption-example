@@ -110,6 +110,13 @@ def nonempty(value: Any) -> bool:
     return True
 
 
+def has_active_sprint(value: Any) -> bool:
+    """Return whether Jira's Sprint field contains an active sprint object."""
+    if not isinstance(value, list):
+        return False
+    return any(isinstance(sprint, dict) and sprint.get("state") == "active" for sprint in value)
+
+
 def stage_and_event(ref: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
     stage = ref.get("agent")
     if stage not in CLAIM_LABELS:
@@ -153,7 +160,6 @@ def gate_failures(stage: str, event: dict[str, Any], issue: dict[str, Any], cfg:
     if fields.get("status", {}).get("name") != jira_cfg["status"]:
         failures.append(f"Jira status must be {jira_cfg['status']}")
     for name, value in (
-        ("Current Sprint", fields.get(configured["current_sprint"])),
         ("Assignee", fields.get("assignee")),
         ("Summary", fields.get("summary")),
         ("Description", fields.get("description")),
@@ -162,6 +168,8 @@ def gate_failures(stage: str, event: dict[str, Any], issue: dict[str, Any], cfg:
     ):
         if not nonempty(value):
             failures.append(f"{name} must be set")
+    if not has_active_sprint(fields.get(configured["current_sprint"])):
+        failures.append("Current Sprint must contain an active sprint")
     try:
         if float(fields.get(configured["story_points"])) <= 0:
             raise ValueError

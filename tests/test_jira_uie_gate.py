@@ -49,7 +49,7 @@ def issue():
             "summary": "Implement the policy gate",
             "description": {"content": [{"type": "paragraph"}]},
             "priority": {"name": "High"},
-            "customfield_1": {"name": "Sprint 1"},
+            "customfield_1": [{"id": 1, "name": "Sprint 1", "state": "active"}],
             "customfield_2": "Given a valid request, it is checked",
             "customfield_3": 3,
         }
@@ -67,6 +67,12 @@ class JiraUieGateTests(unittest.TestCase):
         failures = gate.gate_failures("triage", event(), candidate, CONFIG)
         self.assertIn("repository ownership must be exactly repo:github/jasonawant/uie-fullsend-adoption-example", failures)
         self.assertIn("Story Points must be a positive numeric value", failures)
+
+    def test_rejects_future_only_sprint(self):
+        candidate = issue()
+        candidate["fields"]["customfield_1"] = [{"id": 2, "name": "Sprint 2", "state": "future"}]
+        failures = gate.gate_failures("triage", event(), candidate, CONFIG)
+        self.assertIn("Current Sprint must contain an active sprint", failures)
 
     def test_rejects_bot_and_non_exact_command(self):
         candidate = event()
