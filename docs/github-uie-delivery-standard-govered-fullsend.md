@@ -356,6 +356,20 @@ mechanism satisfies the UIE target behavior. Do not enable scheduled Jira
 polling for production UIE delivery until every required item and its
 prerequisites have been validated.
 
+### GitHub Workflow Permission Scope
+
+`uie-pr-delivery.yml` grants its routing job only `issues: read` and
+`pull-requests: read`. The dispatched harness has the following narrowly
+scoped permissions: `actions: read` for the pinned Fullsend release/runtime
+lookups; `contents: write` for agent-created implementation commits;
+`id-token: write` for the configured workload-identity exchange; `issues: write`
+and `pull-requests: write` for UIE status comments, labels, and reviews; and
+`packages: read` for runtime images. It does not receive merge authority.
+
+The Fullsend v0.50 action and this repository's wrapper use no GitHub Actions
+write operation, so `actions: write` was reduced to `actions: read`. Reassess
+this table whenever upgrading Fullsend or adding workflow steps.
+
 | Group | Current repository state | Required change or decision | Status |
 |---|---|---|---|
 | Configuration | `.fullsend/config.yaml` configures triage, code, review, fix, and retro. Triage and code use local Jira CEL overlays. `.fullsend/uie-delivery.json` contains the fail-closed gate configuration and verified FRFLY field IDs. | Retain the verified mappings and validate them after Jira field changes. | Implemented; integration validation required. |

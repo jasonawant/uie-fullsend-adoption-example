@@ -47,7 +47,7 @@ jobs:
       cancel-in-progress: false
     runs-on: ubuntu-24.04
     permissions:
-      actions: write
+      actions: read
       contents: write
       id-token: write
       issues: write
