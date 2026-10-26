@@ -8,17 +8,14 @@ on:
   pull_request_review:
     types: [submitted]
 
-permissions:
-  actions: write
-  contents: write
-  id-token: write
-  issues: write
-  packages: read
-  pull-requests: write
+permissions: {}
 
 jobs:
   route:
     runs-on: ubuntu-24.04
+    permissions:
+      issues: read
+      pull-requests: read
     outputs:
       matrix: ${{ steps.route.outputs.matrix }}
     steps:
@@ -73,16 +70,19 @@ jobs:
               ;;
           esac
           [[ -n "${stage}" ]] || exit 0
-          if [[ -z "${PR_SHA}" || "${PR_URL}" != *"/pull/"* ]]; then
-            pr_json=$(gh pr view "${PR_NUMBER}" --repo "${REPOSITORY}" --json url,headRefOid)
-            PR_URL=$(jq -r '.url' <<<"${pr_json}")
-            PR_SHA=$(jq -r '.headRefOid' <<<"${pr_json}")
-          fi
+          pr_json=$(gh pr view "${PR_NUMBER}" --repo "${REPOSITORY}" --json url,headRefOid,isCrossRepository)
+          PR_URL=$(jq -r '.url' <<<"${pr_json}")
+          PR_SHA=$(jq -r '.headRefOid' <<<"${pr_json}")
+          IS_CROSS_REPOSITORY=$(jq -r '.isCrossRepository' <<<"${pr_json}")
           if [[ "${manual}" == true ]]; then
             [[ "${ACTOR_TYPE}" != "Bot" ]] || exit 0
             role=$(gh api "repos/${REPOSITORY}/collaborators/${ACTOR}/permission" --jq '.role_name')
             case "${role}" in admin|maintain|write) ;; *) exit 0 ;; esac
           else
+            [[ "${IS_CROSS_REPOSITORY}" != true ]] || {
+              echo "::notice::Automatic fixes are disabled for fork pull requests"
+              exit 0
+            }
             labels=$(gh pr view "${PR_NUMBER}" --repo "${REPOSITORY}" --json labels --jq '[.labels[].name] | join("\n")')
             [[ "${labels}" != *"fullsend-no-fix"* ]] || exit 0
           fi
@@ -103,6 +103,15 @@ jobs:
   dispatch:
     needs: route
     if: needs.route.outputs.matrix != ''
+    # The reusable harness needs write access to update agent branches, pull
+    # request evidence, and status comments; it mints an OIDC-backed token.
+    permissions:
+      actions: write
+      contents: write
+      id-token: write
+      issues: write
+      packages: read
+      pull-requests: write
     uses: ./.github/workflows/uie-dispatch.yml
     with:
       matrix: ${{ needs.route.outputs.matrix }}
