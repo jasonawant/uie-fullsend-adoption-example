@@ -268,7 +268,7 @@ def process(refs: list[dict[str, Any]], jira: Jira, cfg: dict[str, Any], run_url
                 continue
             post_comment(jira, key, f"**UIE {stage} started.** Workflow: {run_url}", marker(key, stage, event, "started"))
             accepted.append(ref)
-        except (GateError, subprocess.CalledProcessError) as exc:
+        except GateError as exc:
             raise GateError(f"UIE gate could not process {key} {stage}: {exc}") from exc
     return accepted
 
