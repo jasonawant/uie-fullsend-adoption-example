@@ -149,6 +149,8 @@ class JiraUieGateTests(unittest.TestCase):
 
     def test_post_comment_wraps_command_failure(self):
         original_run = gate.subprocess.run
+        original_env = dict(os.environ)
+        os.environ.update({"JIRA_USER_EMAIL": "test@example.test", "JIRA_TOKEN": "test-token"})
         gate.subprocess.run = lambda *args, **kwargs: (_ for _ in ()).throw(
             subprocess.CalledProcessError(1, "fullsend")
         )
@@ -157,6 +159,8 @@ class JiraUieGateTests(unittest.TestCase):
                 gate.post_comment(FakeJira(), "FRFLY-123", "body", "marker")
         finally:
             gate.subprocess.run = original_run
+            os.environ.clear()
+            os.environ.update(original_env)
 
     def test_jira_from_env_requires_each_credential(self):
         original = dict(os.environ)
