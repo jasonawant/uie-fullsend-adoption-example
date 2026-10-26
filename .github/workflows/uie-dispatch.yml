@@ -1,0 +1,257 @@
+name: UIE dispatch
+
+on:
+  workflow_call:
+    inputs:
+      matrix:
+        required: true
+        type: string
+      mint_url:
+        required: true
+        type: string
+      gcp_region:
+        required: true
+        type: string
+      jira_base_url:
+        required: true
+        type: string
+      fullsend_version:
+        required: false
+        type: string
+        default: v0.45.0
+    secrets:
+      FULLSEND_GCP_WIF_PROVIDER:
+        required: true
+      FULLSEND_GCP_PROJECT_ID:
+        required: true
+      FULLSEND_OPENAI_API_KEY:
+        required: false
+      OTEL_EXPORTER_OTLP_TRACES_HEADERS:
+        required: false
+      OTEL_EXPORTER_OTLP_HEADERS:
+        required: false
+      JIRA_TOKEN:
+        required: true
+      JIRA_USER_EMAIL:
+        required: true
+
+jobs:
+  harness:
+    name: UIE ${{ matrix.agent }} (${{ matrix.status_number }})
+    if: ${{ fromJSON(inputs.matrix).include[0] != null }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(inputs.matrix) }}
+    concurrency:
+      group: uie-${{ matrix.agent }}-${{ github.repository }}-${{ matrix.status_number }}
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: write
+      id-token: write
+      issues: write
+      packages: read
+      pull-requests: write
+    steps:
+      - name: Checkout UIE configuration
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout pinned upstream defaults
+        uses: actions/checkout@v4
+        with:
+          repository: fullsend-ai/fullsend
+          ref: v0.45.0
+          path: .defaults
+          fetch-depth: 1
+          sparse-checkout: |
+            .github/actions/
+            .github/scripts/
+            internal/scaffold/fullsend-repo/
+            action.yml
+
+      - name: Prepare upstream runtime files
+        run: |
+          set -euo pipefail
+          overlay_dir="${RUNNER_TEMP}/uie-overlay"
+          mkdir -p "${overlay_dir}"
+          # The upstream runtime supplies base scripts and harness resources.
+          # Preserve this repository's overlays and lifecycle utilities, then
+          # layer them back over the pinned defaults.
+          cp -a .fullsend/harness "${overlay_dir}/harness"
+          cp -a .fullsend/scripts "${overlay_dir}/scripts"
+          src=.defaults/internal/scaffold/fullsend-repo
+          for dir in agents skills schemas harness plugins scripts env; do
+            if [[ -d "${src}/${dir}" ]]; then
+              mkdir -p ".fullsend/${dir}"
+              cp -r "${src}/${dir}/." ".fullsend/${dir}/"
+            fi
+          done
+          cp -a "${overlay_dir}/harness/." .fullsend/harness/
+          cp -a "${overlay_dir}/scripts/." .fullsend/scripts/
+          mkdir -p .github/scripts
+          cp "${src}/.github/scripts/setup-agent-env.sh" .github/scripts/setup-agent-env.sh
+
+      - name: Write normalized dispatch event
+        env:
+          EVENT_PAYLOAD: ${{ matrix.event_payload }}
+        run: |
+          set -euo pipefail
+          mkdir -p .fullsend/dispatch
+          printf '%s' "${EVENT_PAYLOAD}" > .fullsend/dispatch/event-payload.json
+
+      - name: Extract target repository name
+        id: repo-parts
+        env:
+          SOURCE_REPO: ${{ matrix.source_repo }}
+        run: |
+          set -euo pipefail
+          echo "name=${SOURCE_REPO#*/}" >> "$GITHUB_OUTPUT"
+
+      - name: Mint target repository token
+        id: app-token
+        uses: ./.defaults/.github/actions/mint-token
+        with:
+          role: ${{ matrix.role }}
+          repos: ${{ steps.repo-parts.outputs.name }}
+          mint_url: ${{ inputs.mint_url }}
+
+      - name: Checkout target repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.source_repo }}
+          token: ${{ steps.app-token.outputs.token }}
+          path: target-repo
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve bot identity
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          read -r bot_login bot_id < <(gh api graphql -f query='{ viewer { login databaseId } }' | jq -r '.data.viewer | "\(.login) \(.databaseId)"')
+          echo "GIT_BOT_EMAIL=${bot_id}+${bot_login}@users.noreply.github.com" >> "$GITHUB_ENV"
+          git config --global user.email "${bot_id}+${bot_login}@users.noreply.github.com"
+          git config --global user.name "${bot_login}"
+
+      - name: Set up agent environment
+        env:
+          MATRIX_ROLE: ${{ matrix.role }}
+          GCP_PROJECT: ${{ secrets.FULLSEND_GCP_PROJECT_ID }}
+          GCP_REGION: ${{ inputs.gcp_region }}
+          FULLSEND_REPO_VARS: ${{ toJSON(vars) }}
+        run: |
+          set -euo pipefail
+          role_upper=$(printf '%s' "$MATRIX_ROLE" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
+          export AGENT_PREFIX="${role_upper}_"
+          export "${role_upper}_TARGET_REPO_DIR=target-repo"
+          export "${role_upper}_ANTHROPIC_VERTEX_PROJECT_ID=${GCP_PROJECT}"
+          export "${role_upper}_CLOUD_ML_REGION=${GCP_REGION}"
+          bash .github/scripts/setup-agent-env.sh
+
+      - name: Pre-fetch prior review context
+        id: prior-review
+        if: matrix.agent == 'review'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          SOURCE_REPO: ${{ matrix.source_repo }}
+          PR_NUM: ${{ fromJSON(matrix.event_payload).pull_request.number }}
+          ORG_NAME: ${{ github.repository_owner }}
+          FULLSEND_APP_SET: ${{ vars.FULLSEND_APP_SET }}
+          REVIEW_APP_CLIENT_ID: ${{ vars.FULLSEND_REVIEW_CLIENT_ID }}
+          FULLSEND_DIR: .fullsend
+        run: bash "${FULLSEND_DIR}/scripts/pre-fetch-prior-review.sh"
+
+      - name: Run Fullsend harness
+        id: run
+        uses: ./.defaults/
+        env:
+          GITHUB_ISSUE_URL: ${{ fromJSON(matrix.event_payload).issue.html_url || '' }}
+          GITHUB_PR_URL: ${{ fromJSON(matrix.event_payload).pull_request.html_url || '' }}
+          FULLSEND_WORK_ITEM_URL: ${{ fromJSON(matrix.event_payload).pull_request.html_url || fromJSON(matrix.event_payload).issue.html_url }}
+          FULLSEND_WORK_ITEM_KEY: ${{ fromJSON(matrix.event_payload)._normalized_event.entity.key }}
+          ISSUE_NUMBER: ${{ fromJSON(matrix.event_payload).issue.number || '' }}
+          PR_NUMBER: ${{ fromJSON(matrix.event_payload).pull_request.number || '' }}
+          PRIOR_REVIEW_SHA: ${{ steps.prior-review.outputs.prior_sha }}
+          PRIOR_REVIEW_FILE: ${{ steps.prior-review.outputs.prior_review_file }}
+          PRIOR_REVIEW_PROVENANCE: ${{ steps.prior-review.outputs.prior_review_provenance }}
+          REPO_FULL_NAME: ${{ matrix.source_repo }}
+          JIRA_BASE_URL: ${{ inputs.jira_base_url }}
+          JIRA_TOKEN: ${{ secrets.JIRA_TOKEN }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          OTEL_EXPORTER_OTLP_TRACES_HEADERS: ${{ secrets.OTEL_EXPORTER_OTLP_TRACES_HEADERS }}
+          OTEL_EXPORTER_OTLP_HEADERS: ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
+          OPENAI_API_KEY: ${{ secrets.FULLSEND_OPENAI_API_KEY }}
+        with:
+          agent: ${{ matrix.agent }}
+          fullsend-dir: .fullsend
+          target-repo: target-repo
+          version: ${{ inputs.fullsend_version }}
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          status-repo: ${{ matrix.status_repo }}
+          status-number: ${{ matrix.status_number }}
+          status-comment-id: ${{ fromJSON(matrix.event_payload).comment.id }}
+          mint-url: ${{ inputs.mint_url }}
+          pr-head-sha: ${{ fromJSON(matrix.event_payload).pull_request.head.sha || '' }}
+          gcp_wif_provider: ${{ secrets.FULLSEND_GCP_WIF_PROVIDER }}
+          gcp_project_id: ${{ secrets.FULLSEND_GCP_PROJECT_ID }}
+
+      - name: Finalize UIE Jira stage
+        if: always() && (matrix.agent == 'triage' || matrix.agent == 'code')
+        env:
+          JIRA_BASE_URL: ${{ inputs.jira_base_url }}
+          JIRA_TOKEN: ${{ secrets.JIRA_TOKEN }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          ISSUE_KEY: ${{ fromJSON(matrix.event_payload)._normalized_event.entity.key }}
+          STAGE: ${{ matrix.agent }}
+          JOB_STATUS: ${{ job.status }}
+          WAS_SKIPPED: ${{ steps.run.outputs.skipped }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python3 .fullsend/scripts/jira_uie_complete.py \
+            --config .fullsend/uie-delivery.json \
+            --issue "${ISSUE_KEY}" \
+            --stage "${STAGE}" \
+            --job-status "${JOB_STATUS}" \
+            --skipped "${WAS_SKIPPED}" \
+            --run-url "${RUN_URL}" \
+            --output-dir output \
+            --correlation-output "${RUNNER_TEMP}/uie-correlation.json"
+
+      - name: Record Jira correlation on created pull request
+        if: always() && matrix.agent == 'code'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ -f "${RUNNER_TEMP}/uie-correlation.json" ]] || exit 0
+          issue=$(jq -r '.issue' "${RUNNER_TEMP}/uie-correlation.json")
+          pr_url=$(jq -r '.pr_url' "${RUNNER_TEMP}/uie-correlation.json")
+          gh pr comment "${pr_url}" --body "<!-- fullsend-uie:jira=${issue} -->"
+          gh pr edit "${pr_url}" --remove-label ready-for-review 2>/dev/null || true
+
+      - name: Post PR-stage Jira feedback
+        if: always() && (matrix.agent == 'review' || matrix.agent == 'fix')
+        env:
+          JIRA_BASE_URL: ${{ inputs.jira_base_url }}
+          JIRA_TOKEN: ${{ secrets.JIRA_TOKEN }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          ISSUE_KEY: ${{ matrix.jira_issue_key }}
+          STAGE: ${{ matrix.agent }}
+          JOB_STATUS: ${{ job.status }}
+          PR_URL: ${{ fromJSON(matrix.event_payload).pull_request.html_url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          [[ -n "${ISSUE_KEY}" ]] || { echo "::error::PR-stage dispatch has no Jira correlation"; exit 1; }
+          python3 .fullsend/scripts/jira_uie_pr_feedback.py \
+            --config .fullsend/uie-delivery.json \
+            --issue "${ISSUE_KEY}" \
+            --stage "${STAGE}" \
+            --job-status "${JOB_STATUS}" \
+            --pr-url "${PR_URL}" \
+            --run-url "${RUN_URL}"
