@@ -24,3 +24,5 @@ jobs:
         run: yamllint .github/ .fullsend/
       - name: Lint Markdown
         run: markdownlint "**/*.md"
+      - name: Test UIE delivery gate
+        run: python3 -m unittest discover -s tests

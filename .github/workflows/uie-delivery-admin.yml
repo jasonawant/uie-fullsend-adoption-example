@@ -1,0 +1,62 @@
+name: UIE delivery administration
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: record-triage or release-claim
+        required: true
+        type: choice
+        options: [record-triage, release-claim]
+      issue:
+        description: Jira issue key, for example FRFLY-123
+        required: true
+        type: string
+      triage_action:
+        description: Required for record-triage
+        required: false
+        type: choice
+        options: [sufficient, insufficient, duplicate, prerequisites, in-progress]
+      reason:
+        description: Human-readable audit reason
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  administer:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install fullsend
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v0.45.0 --repo fullsend-ai/fullsend \
+            -p 'fullsend_*_linux_amd64.tar.gz' -O - | tar xz
+          sudo mv fullsend /usr/local/bin/
+      - name: Record triage result or release stage claim
+        env:
+          JIRA_BASE_URL: ${{ vars.JIRA_BASE_URL }}
+          JIRA_TOKEN: ${{ secrets.JIRA_TOKEN }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          UIE_ACTION: ${{ inputs.action }}
+          UIE_ISSUE: ${{ inputs.issue }}
+          UIE_REASON: ${{ inputs.reason }}
+          UIE_TRIAGE_ACTION: ${{ inputs.triage_action }}
+          UIE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          args=(
+            "${UIE_ACTION}"
+            --config .fullsend/uie-delivery.json
+            --issue "${UIE_ISSUE}"
+            --run-url "${UIE_RUN_URL}"
+            --reason "${UIE_REASON}"
+          )
+          if [[ "${UIE_ACTION}" == "record-triage" ]]; then
+            args+=(--triage-action "${UIE_TRIAGE_ACTION}")
+          fi
+          python3 .fullsend/scripts/jira_uie_claim.py "${args[@]}"
