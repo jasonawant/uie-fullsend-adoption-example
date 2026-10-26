@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -172,6 +173,24 @@ class JiraUieGateTests(unittest.TestCase):
         finally:
             os.environ.clear()
             os.environ.update(original)
+
+    def test_main_reports_missing_input_file_cleanly(self):
+        original_argv = sys.argv
+        try:
+            sys.argv = [
+                "jira_uie_gate.py",
+                "--config",
+                str(Path(__file__).parents[1] / ".fullsend/uie-delivery.json"),
+                "--input",
+                "missing-input.json",
+                "--output",
+                "unused-output.json",
+                "--run-url",
+                "https://example.test/run",
+            ]
+            self.assertEqual(gate.main(), 1)
+        finally:
+            sys.argv = original_argv
 
     def test_claim_expiry(self):
         now = dt.datetime.now(dt.timezone.utc)

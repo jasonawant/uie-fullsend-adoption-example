@@ -288,7 +288,7 @@ def main() -> int:
         accepted = process(refs, Jira.from_env(), cfg, args.run_url)
         args.output.write_text(json.dumps(accepted) + "\n")
         return 0
-    except (GateError, json.JSONDecodeError) as exc:
+    except (GateError, OSError, json.JSONDecodeError) as exc:
         print(f"UIE gate failed: {exc}", file=sys.stderr)
         return 1
 
