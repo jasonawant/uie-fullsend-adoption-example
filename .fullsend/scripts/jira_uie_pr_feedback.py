@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -22,10 +21,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         load_config(args.config)
-        for name in ("JIRA_BASE_URL", "JIRA_USER_EMAIL", "JIRA_TOKEN"):
-            if not os.environ.get(name):
-                raise GateError(f"{name} is required")
-        jira = Jira(os.environ["JIRA_BASE_URL"], os.environ["JIRA_USER_EMAIL"], os.environ["JIRA_TOKEN"])
+        jira = Jira.from_env()
         body = f"**UIE {args.stage} {args.job_status}.**\n\nPull request: {args.pr_url}\n\nWorkflow: {args.run_url}"
         run_id = args.run_url.rsplit("/", 1)[-1]
         post_comment(jira, args.issue, body, f"uie-{args.stage}-{args.issue}-{run_id}")

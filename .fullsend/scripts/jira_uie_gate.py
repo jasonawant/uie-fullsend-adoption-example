@@ -44,6 +44,14 @@ class Jira:
             "Content-Type": "application/json",
         }
 
+    @classmethod
+    def from_env(cls) -> Jira:
+        required = ("JIRA_BASE_URL", "JIRA_USER_EMAIL", "JIRA_TOKEN")
+        missing = next((name for name in required if not os.environ.get(name)), None)
+        if missing:
+            raise GateError(f"{missing} is required")
+        return cls(os.environ["JIRA_BASE_URL"], os.environ["JIRA_USER_EMAIL"], os.environ["JIRA_TOKEN"])
+
     def request(self, method: str, path: str, body: Any | None = None) -> Any:
         data = None if body is None else json.dumps(body).encode()
         request = urllib.request.Request(
@@ -193,7 +201,10 @@ def post_comment(jira: Jira, key: str, text: str, comment_marker: str) -> None:
         "--jira-email", os.environ["JIRA_USER_EMAIL"], "--token", os.environ["JIRA_TOKEN"],
         "--marker", comment_marker, "--result", "-",
     ]
-    subprocess.run(command, input=text, text=True, check=True, capture_output=True)
+    try:
+        subprocess.run(command, input=text, text=True, check=True, capture_output=True)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise GateError(f"Failed to post Jira comment: {exc}") from exc
 
 
 def active_claim(claim: Any, now: dt.datetime, ttl_minutes: int) -> bool:
@@ -271,13 +282,10 @@ def main() -> int:
     args = parser.parse_args()
     try:
         cfg = load_config(args.config)
-        for name in ("JIRA_BASE_URL", "JIRA_USER_EMAIL", "JIRA_TOKEN"):
-            if not os.environ.get(name):
-                raise GateError(f"{name} is required")
         refs = json.loads(args.input.read_text())
         if not isinstance(refs, list):
             raise GateError("poll output must be a JSON array")
-        accepted = process(refs, Jira(os.environ["JIRA_BASE_URL"], os.environ["JIRA_USER_EMAIL"], os.environ["JIRA_TOKEN"]), cfg, args.run_url)
+        accepted = process(refs, Jira.from_env(), cfg, args.run_url)
         args.output.write_text(json.dumps(accepted) + "\n")
         return 0
     except (GateError, json.JSONDecodeError) as exc:

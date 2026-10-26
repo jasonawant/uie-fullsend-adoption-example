@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -60,10 +59,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         cfg = load_config(args.config)
-        for name in ("JIRA_BASE_URL", "JIRA_USER_EMAIL", "JIRA_TOKEN"):
-            if not os.environ.get(name):
-                raise GateError(f"{name} is required")
-        jira = Jira(os.environ["JIRA_BASE_URL"], os.environ["JIRA_USER_EMAIL"], os.environ["JIRA_TOKEN"])
+        jira = Jira.from_env()
         claim = jira.property(args.issue, cfg["jira"]["claim_property"])
         if not isinstance(claim, dict) or claim.get("stage") != args.stage:
             raise GateError(f"no matching active {args.stage} claim exists")
@@ -98,7 +94,7 @@ def main() -> int:
         for name, cleanup in cleanup_steps:
             try:
                 cleanup()
-            except (GateError, subprocess.CalledProcessError) as exc:
+            except GateError as exc:
                 cleanup_errors.append(f"{name}: {exc}")
         if cleanup_errors:
             raise GateError("terminal cleanup incomplete: " + "; ".join(cleanup_errors))

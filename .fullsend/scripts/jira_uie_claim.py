@@ -5,19 +5,10 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import os
 import sys
 from pathlib import Path
 
 from jira_uie_gate import CLAIM_LABELS, GateError, Jira, load_config, post_comment
-
-
-def client() -> Jira:
-    for name in ("JIRA_BASE_URL", "JIRA_USER_EMAIL", "JIRA_TOKEN"):
-        if not os.environ.get(name):
-            raise GateError(f"{name} is required")
-    return Jira(os.environ["JIRA_BASE_URL"], os.environ["JIRA_USER_EMAIL"], os.environ["JIRA_TOKEN"])
-
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -30,7 +21,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         cfg = load_config(args.config)
-        jira = client()
+        jira = Jira.from_env()
         stamp = dt.datetime.now(dt.timezone.utc).isoformat()
         if args.action == "record-triage":
             if not args.triage_action:

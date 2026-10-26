@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -23,14 +22,6 @@ FIELD_NAMES = {
     "acceptance_criteria": "Acceptance Criteria",
     "story_points": "Story Points",
 }
-
-
-def required_client() -> Jira:
-    for name in ("JIRA_BASE_URL", "JIRA_USER_EMAIL", "JIRA_TOKEN"):
-        if not os.environ.get(name):
-            raise GateError(f"{name} is required")
-    return Jira(os.environ["JIRA_BASE_URL"], os.environ["JIRA_USER_EMAIL"], os.environ["JIRA_TOKEN"])
-
 
 def candidates(fields: list[dict[str, Any]], name: str) -> list[dict[str, str]]:
     return [
@@ -46,7 +37,7 @@ def main() -> int:
     parser.add_argument("--write", action="store_true", help="write unambiguous discovered IDs to --config")
     args = parser.parse_args()
     try:
-        jira = required_client()
+        jira = Jira.from_env()
         fields = jira.request("GET", "/field")
         if not isinstance(fields, list):
             raise GateError("Jira /field did not return a field list")

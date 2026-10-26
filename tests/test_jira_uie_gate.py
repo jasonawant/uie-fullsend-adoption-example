@@ -1,6 +1,8 @@
 import datetime as dt
 import importlib.util
 import json
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -59,6 +61,7 @@ def issue():
 
 class FakeJira:
     def __init__(self, triage=None):
+        self.base_url = "https://jira.example.test"
         self.triage = triage
         self.claim = None
 
@@ -143,6 +146,28 @@ class JiraUieGateTests(unittest.TestCase):
         self.assertFalse(gate.nonempty([]))
         self.assertFalse(gate.nonempty({}))
         self.assertTrue(gate.nonempty(["value"]))
+
+    def test_post_comment_wraps_command_failure(self):
+        original_run = gate.subprocess.run
+        gate.subprocess.run = lambda *args, **kwargs: (_ for _ in ()).throw(
+            subprocess.CalledProcessError(1, "fullsend")
+        )
+        try:
+            with self.assertRaisesRegex(gate.GateError, "Failed to post Jira comment"):
+                gate.post_comment(FakeJira(), "FRFLY-123", "body", "marker")
+        finally:
+            gate.subprocess.run = original_run
+
+    def test_jira_from_env_requires_each_credential(self):
+        original = dict(os.environ)
+        try:
+            for name in ("JIRA_BASE_URL", "JIRA_USER_EMAIL", "JIRA_TOKEN"):
+                os.environ.pop(name, None)
+            with self.assertRaisesRegex(gate.GateError, "JIRA_BASE_URL is required"):
+                gate.Jira.from_env()
+        finally:
+            os.environ.clear()
+            os.environ.update(original)
 
     def test_claim_expiry(self):
         now = dt.datetime.now(dt.timezone.utc)
