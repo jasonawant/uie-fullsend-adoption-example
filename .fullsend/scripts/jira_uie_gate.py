@@ -82,7 +82,9 @@ class Jira:
             if "returned 404" not in str(exc):
                 raise
 
-    def labels(self, key: str, add: list[str] = [], remove: list[str] = []) -> None:
+    def labels(self, key: str, add: list[str] | None = None, remove: list[str] | None = None) -> None:
+        add = add or []
+        remove = remove or []
         update: dict[str, list[dict[str, str]]] = {"labels": []}
         update["labels"].extend({"add": label} for label in add)
         update["labels"].extend({"remove": label} for label in remove)
@@ -105,7 +107,7 @@ def load_config(path: Path) -> dict[str, Any]:
 def nonempty(value: Any) -> bool:
     if value is None or value == "":
         return False
-    if isinstance(value, dict):
+    if isinstance(value, (dict, list, set, tuple)):
         return bool(value)
     return True
 

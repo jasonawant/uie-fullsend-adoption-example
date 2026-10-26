@@ -108,7 +108,11 @@ jobs:
           SOURCE_REPO: ${{ matrix.source_repo }}
         run: |
           set -euo pipefail
-          echo "name=${SOURCE_REPO#*/}" >> "$GITHUB_OUTPUT"
+          [[ "${SOURCE_REPO}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || {
+            echo "::error::Invalid source repository name"
+            exit 1
+          }
+          printf 'name=%s\n' "${SOURCE_REPO#*/}" >> "$GITHUB_OUTPUT"
 
       - name: Mint target repository token
         id: app-token

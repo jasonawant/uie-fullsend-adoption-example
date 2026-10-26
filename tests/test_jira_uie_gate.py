@@ -1,6 +1,7 @@
 import datetime as dt
 import importlib.util
 import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -56,6 +57,27 @@ def issue():
     }
 
 
+class FakeJira:
+    def __init__(self, triage=None):
+        self.triage = triage
+        self.claim = None
+
+    def issue(self, key, field_ids):
+        return issue()
+
+    def property(self, key, name):
+        if name == CONFIG["jira"]["triage_property"]:
+            return self.triage
+        return self.claim
+
+    def set_property(self, key, name, value):
+        if name == CONFIG["jira"]["claim_property"]:
+            self.claim = value
+
+    def labels(self, key, add=None, remove=None):
+        pass
+
+
 class JiraUieGateTests(unittest.TestCase):
     def test_accepts_complete_triage_request(self):
         self.assertEqual(gate.gate_failures("triage", event(), issue(), CONFIG), [])
@@ -84,6 +106,43 @@ class JiraUieGateTests(unittest.TestCase):
         failures = gate.gate_failures("triage", candidate, issue(), CONFIG)
         self.assertIn("trigger actor is the Jira poller bot", failures)
         self.assertIn("event is not a new ready-for-triage label or exact /fs-triage command", failures)
+
+    def test_trigger_must_be_an_exact_first_line_command(self):
+        valid = event()
+        valid["transition"] = {
+            "kind": "comment_added",
+            "comment": {"command": "/fs-triage", "body": "/fs-triage"},
+        }
+        self.assertTrue(gate.trigger_is_valid("triage", valid))
+        valid["transition"]["comment"]["body"] = "/fs-triage investigate this"
+        self.assertFalse(gate.trigger_is_valid("triage", valid))
+
+    def test_code_request_requires_sufficient_triage(self):
+        ref = {"agent": "code", "event_payload": json.dumps(event("code"))}
+        original_post_comment = gate.post_comment
+        gate.post_comment = lambda *args: None
+        try:
+            self.assertEqual(gate.process([ref], FakeJira(), CONFIG, "https://example.test/run"), [])
+            accepted = gate.process(
+                [ref], FakeJira({"action": "sufficient"}), CONFIG, "https://example.test/run"
+            )
+        finally:
+            gate.post_comment = original_post_comment
+        self.assertEqual(len(accepted), 1)
+
+    def test_load_config_rejects_missing_required_value(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "uie-delivery.json"
+            invalid = json.loads(json.dumps(CONFIG))
+            invalid["jira"]["fields"]["story_points"] = ""
+            path.write_text(json.dumps(invalid))
+            with self.assertRaisesRegex(gate.GateError, "fields.story_points"):
+                gate.load_config(path)
+
+    def test_nonempty_rejects_empty_collections(self):
+        self.assertFalse(gate.nonempty([]))
+        self.assertFalse(gate.nonempty({}))
+        self.assertTrue(gate.nonempty(["value"]))
 
     def test_claim_expiry(self):
         now = dt.datetime.now(dt.timezone.utc)

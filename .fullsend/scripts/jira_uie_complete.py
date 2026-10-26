@@ -88,10 +88,20 @@ def main() -> int:
             lines.insert(1, f"Triage action: `{action}`.")
         if pr_url:
             lines.insert(1, f"Pull request: {pr_url}")
-        jira.labels(args.issue, remove=[CLAIM_LABELS[args.stage]])
-        jira.delete_property(args.issue, cfg["jira"]["claim_property"])
         claim_id = claim.get("id", "unknown")
-        post_comment(jira, args.issue, "\n\n".join(lines), f"uie-terminal-{claim_id}")
+        cleanup_errors: list[str] = []
+        cleanup_steps = (
+            ("remove claim label", lambda: jira.labels(args.issue, remove=[CLAIM_LABELS[args.stage]])),
+            ("delete claim property", lambda: jira.delete_property(args.issue, cfg["jira"]["claim_property"])),
+            ("post terminal comment", lambda: post_comment(jira, args.issue, "\n\n".join(lines), f"uie-terminal-{claim_id}")),
+        )
+        for name, cleanup in cleanup_steps:
+            try:
+                cleanup()
+            except (GateError, subprocess.CalledProcessError) as exc:
+                cleanup_errors.append(f"{name}: {exc}")
+        if cleanup_errors:
+            raise GateError("terminal cleanup incomplete: " + "; ".join(cleanup_errors))
         return 0
     except GateError as exc:
         print(f"UIE completion failed: {exc}", file=sys.stderr)
