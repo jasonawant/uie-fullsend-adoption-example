@@ -106,7 +106,7 @@ jobs:
     # The reusable harness needs write access to update agent branches, pull
     # request evidence, and status comments; it mints an OIDC-backed token.
     permissions:
-      actions: write
+      actions: read
       contents: write
       id-token: write
       issues: write
