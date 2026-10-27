@@ -133,6 +133,34 @@ class JiraUieGateTests(unittest.TestCase):
             gate.post_comment = original_post_comment
         self.assertEqual(len(accepted), 1)
 
+    def test_processes_fullsend_normalized_event_envelope(self):
+        candidate = issue()
+        candidate["fields"]["customfield_3"] = None
+
+        class RejectingJira(FakeJira):
+            def issue(self, key, field_ids):
+                return candidate
+
+        ref = {
+            "agent": "triage",
+            "event_payload": json.dumps({"issue": {"number": 123}, "_normalized_event": event()}),
+        }
+        posted = []
+        original_post_comment = gate.post_comment
+        gate.post_comment = lambda *args: posted.append(args)
+        try:
+            self.assertEqual(gate.process([ref], RejectingJira(), CONFIG, "https://example.test/run"), [])
+        finally:
+            gate.post_comment = original_post_comment
+
+        self.assertEqual(len(posted), 1)
+        self.assertIn("Story Points must be a positive numeric value", posted[0][2])
+
+    def test_stage_and_event_rejects_non_object_payload(self):
+        ref = {"agent": "triage", "event_payload": json.dumps(["not", "an", "event"])}
+        with self.assertRaisesRegex(gate.GateError, "must contain an event object"):
+            gate.stage_and_event(ref)
+
     def test_load_config_rejects_missing_required_value(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "uie-delivery.json"

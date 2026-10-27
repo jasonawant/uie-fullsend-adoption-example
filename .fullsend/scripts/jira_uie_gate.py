@@ -131,9 +131,14 @@ def stage_and_event(ref: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
     if stage not in CLAIM_LABELS:
         return None, {}
     try:
-        event = json.loads(ref["event_payload"])
+        payload = json.loads(ref["event_payload"])
     except (KeyError, TypeError, json.JSONDecodeError) as exc:
         raise GateError(f"dispatch has invalid event_payload: {exc}") from exc
+    # Fullsend execution references retain GitHub-shaped compatibility fields
+    # at the payload root. Jira's normalized event is nested beneath this key.
+    event = payload.get("_normalized_event", payload) if isinstance(payload, dict) else payload
+    if not isinstance(event, dict):
+        raise GateError("dispatch event_payload must contain an event object")
     if event.get("source", {}).get("system") != "jira" or event.get("entity", {}).get("kind") != "work_item":
         return None, event
     return stage, event
