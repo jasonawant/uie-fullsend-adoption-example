@@ -2,7 +2,6 @@ import datetime as dt
 import importlib.util
 import json
 import os
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -148,20 +147,46 @@ class JiraUieGateTests(unittest.TestCase):
         self.assertFalse(gate.nonempty({}))
         self.assertTrue(gate.nonempty(["value"]))
 
-    def test_post_comment_wraps_command_failure(self):
-        original_run = gate.subprocess.run
-        original_env = dict(os.environ)
-        os.environ.update({"JIRA_USER_EMAIL": "test@example.test", "JIRA_TOKEN": "test-token"})
-        gate.subprocess.run = lambda *args, **kwargs: (_ for _ in ()).throw(
-            subprocess.CalledProcessError(1, "fullsend")
-        )
-        try:
-            with self.assertRaisesRegex(gate.GateError, "Failed to post Jira comment"):
-                gate.post_comment(FakeJira(), "FRFLY-123", "body", "marker")
-        finally:
-            gate.subprocess.run = original_run
-            os.environ.clear()
-            os.environ.update(original_env)
+    def test_post_comment_creates_visible_comment_and_marker(self):
+        class CommentJira:
+            def __init__(self):
+                self.calls = []
+
+            def request(self, method, path, body=None):
+                self.calls.append((method, path, body))
+                if method == "GET":
+                    return {"comments": []}
+                if method == "POST":
+                    return {"id": "12345"}
+                return {}
+
+        jira = CommentJira()
+        gate.post_comment(jira, "FRFLY-123", "body", "marker")
+        self.assertEqual([call[0] for call in jira.calls], ["GET", "POST", "PUT"])
+        self.assertEqual(jira.calls[1][1], "/issue/FRFLY-123/comment")
+        self.assertEqual(jira.calls[1][2]["body"]["content"][0]["content"][0]["text"], "body")
+        self.assertEqual(jira.calls[2][1], "/comment/12345/properties/marker")
+
+    def test_post_comment_does_not_duplicate_existing_marker(self):
+        class CommentJira:
+            def __init__(self):
+                self.calls = []
+
+            def request(self, method, path, body=None):
+                self.calls.append((method, path, body))
+                return {"comments": [{"properties": [{"key": "marker"}]}]}
+
+        jira = CommentJira()
+        gate.post_comment(jira, "FRFLY-123", "body", "marker")
+        self.assertEqual([call[0] for call in jira.calls], ["GET"])
+
+    def test_post_comment_rejects_missing_comment_id(self):
+        class CommentJira:
+            def request(self, method, path, body=None):
+                return {"comments": []} if method == "GET" else {}
+
+        with self.assertRaisesRegex(gate.GateError, "did not return an ID"):
+            gate.post_comment(CommentJira(), "FRFLY-123", "body", "marker")
 
     def test_jira_from_env_requires_each_credential(self):
         original = dict(os.environ)

@@ -15,7 +15,6 @@ import datetime as dt
 import hashlib
 import json
 import os
-import subprocess
 import sys
 import urllib.error
 import urllib.parse
@@ -195,16 +194,33 @@ def marker(key: str, stage: str, event: dict[str, Any], kind: str) -> str:
 
 
 def post_comment(jira: Jira, key: str, text: str, comment_marker: str) -> None:
-    command = [
-        "fullsend", "issues", "post-comment", "--tracker", "jira", "--project", key.split("-", 1)[0],
-        "--number", key.rsplit("-", 1)[1], "--jira-url", jira.base_url,
-        "--jira-email", os.environ["JIRA_USER_EMAIL"], "--token", os.environ["JIRA_TOKEN"],
-        "--marker", comment_marker, "--result", "-",
-    ]
-    try:
-        subprocess.run(command, input=text, text=True, check=True, capture_output=True)
-    except (OSError, subprocess.CalledProcessError) as exc:
-        raise GateError(f"Failed to post Jira comment: {exc}") from exc
+    """Post an idempotent visible Jira comment.
+
+    Fullsend's Jira ``post-comment`` command can exit successfully without
+    creating a visible comment. The delivery gate needs its rejection and
+    lifecycle feedback to be reliable, so it uses Jira's REST API directly
+    and stores the marker as a Jira comment property.
+    """
+    comments = jira.request("GET", f"/issue/{urllib.parse.quote(key)}/comment?expand=properties")
+    for comment in comments.get("comments", []):
+        for property_value in comment.get("properties", []):
+            if property_value.get("key") == comment_marker:
+                return
+
+    body = {
+        "type": "doc",
+        "version": 1,
+        "content": [{"type": "paragraph", "content": [{"type": "text", "text": text}]}],
+    }
+    created = jira.request("POST", f"/issue/{urllib.parse.quote(key)}/comment", {"body": body})
+    comment_id = created.get("id") if isinstance(created, dict) else None
+    if not comment_id:
+        raise GateError("Jira did not return an ID for the posted comment")
+    jira.request(
+        "PUT",
+        f"/comment/{urllib.parse.quote(str(comment_id))}/properties/{urllib.parse.quote(comment_marker)}",
+        {"value": True},
+    )
 
 
 def active_claim(claim: Any, now: dt.datetime, ttl_minutes: int) -> bool:
